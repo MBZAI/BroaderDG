@@ -20,6 +20,7 @@ from domainbed.lib.misc import (
     MovingAverage, l2_between_dicts, proj
 )
 
+import domainbed.lib.clip.clip as clip
 
 ALGORITHMS = [
     'ERM',
@@ -64,7 +65,7 @@ class Algorithm(torch.nn.Module):
     A subclass of Algorithm implements a domain generalization algorithm.
     Subclasses should implement the following:
     - update()
-    - predict()
+    - predict()algorithms
     """
     def __init__(self, input_shape, num_classes, num_domains, hparams):
         super(Algorithm, self).__init__()
@@ -118,6 +119,50 @@ class ERM(Algorithm):
     def predict(self, x):
         return self.network(x)
 
+class ERM_ViT_classifier_learning(Algorithm):
+    """
+    Empirical Risk Minimization (ERM)
+    """
+
+    def __init__(self, input_shape, num_classes, num_domains, hparams):
+        super(ERM_ViT_classifier_learning, self).__init__(input_shape, num_classes, num_domains,
+                                  hparams)
+
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+        model, preprocess = clip.load('ViT-B/16', device)
+        self.featurizer=model.float()
+        self.featurizer.head=nn.Identity()
+        # self.featurizer = networks.ViT(input_shape, self.hparams,num_classes)
+        # if(self.hparams['weight_init']=="clip"):
+        #     self.featurizer.network.proj=None
+        # else:
+
+        #     self.featurizer.network.head=nn.Identity()
+        self.classifier = networks.Classifier(
+            768,
+            num_classes,
+            self.hparams['nonlinear_classifier'])
+        self.network = nn.Sequential(self.featurizer, self.classifier)
+        printNetworkParams(self.network)
+        self.optimizer = torch.optim.AdamW(
+            self.network.parameters(),
+            lr=self.hparams["lr"],
+            weight_decay=self.hparams['weight_decay']
+        )
+        
+    def update(self, minibatches, unlabeled=None):
+        all_x = torch.cat([x for x,y in minibatches])
+        all_y = torch.cat([y for x,y in minibatches])
+        loss = F.cross_entropy(self.predict(all_x), all_y)
+
+        self.optimizer.zero_grad()
+        loss.backward()
+        self.optimizer.step()
+
+        return {'loss': loss.item()}
+
+    def predict(self, x):
+        return self.network(x)
 
 class Fish(Algorithm):
     """

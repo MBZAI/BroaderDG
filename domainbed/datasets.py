@@ -30,7 +30,8 @@ DATASETS = [
     "SVIRO",
     # WILDS datasets
     "WILDSCamelyon",
-    "WILDSFMoW"
+    "WILDSFMoW",
+    "EyePACS"
 ]
 
 def get_dataset_class(dataset_name):
@@ -179,6 +180,22 @@ class RotatedMNIST(MultipleEnvironmentMNIST):
 class MultipleEnvironmentImageFolder(MultipleDomainDataset):
     def __init__(self, root, test_envs, augment, hparams):
         super().__init__()
+        # environments = [f.name for f in os.scandir(root) if f.is_dir()]
+        # environments = sorted(environments)
+        # self.environments = environments
+        # print(environments)
+
+        # self.datasets = []
+        # for environment in environments:
+        #     path = os.path.join(root, environment)
+        #     print(path)
+        #     env_dataset = ImageFolder(path)
+
+        #     self.datasets.append(env_dataset)
+
+        # self.input_shape = (3, 224, 224)
+        # self.num_classes = len(self.datasets[-1].classes)
+        
         environments = [f.name for f in os.scandir(root) if f.is_dir()]
         environments = sorted(environments)
 
@@ -191,7 +208,7 @@ class MultipleEnvironmentImageFolder(MultipleDomainDataset):
 
         augment_transform = transforms.Compose([
             # transforms.Resize((224,224)),
-            transforms.RandomResizedCrop(224, scale=(0.7, 1.0)),
+            transforms.RandomResizedCrop(224, scale=(0.9, 1.0)),
             transforms.RandomHorizontalFlip(),
             transforms.ColorJitter(0.3, 0.3, 0.3, 0.3),
             transforms.RandomGrayscale(),
@@ -216,6 +233,21 @@ class MultipleEnvironmentImageFolder(MultipleDomainDataset):
 
         self.input_shape = (3, 224, 224,)
         self.num_classes = len(self.datasets[-1].classes)
+
+class EyePACS(MultipleEnvironmentImageFolder):
+    CHECKPOINT_FREQ = 300
+    ENVIRONMENTS = ["train", "test"]
+    def __init__(self, root, test_envs, hparams):
+        self.dir = os.path.join(root, "EyePACS/")
+        super().__init__(self.dir, test_envs, hparams['data_augmentation'], hparams)
+
+class DR(MultipleEnvironmentImageFolder):
+    CHECKPOINT_FREQ = 200
+    ENVIRONMENTS = ["aptos", "eyepacs", "messidor", "messidor_2"]
+
+    def __init__(self, root, test_envs, hparams):
+        self.dir = os.path.join(root, "DR/")
+        super().__init__(self.dir, test_envs, hparams['data_augmentation'], hparams)
 
 class VLCS(MultipleEnvironmentImageFolder):
     CHECKPOINT_FREQ = 300
