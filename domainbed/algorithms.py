@@ -130,8 +130,8 @@ class ERM_ViT_classifier_learning(Algorithm):
 
         device = "cuda" if torch.cuda.is_available() else "cpu"
         model, preprocess = clip.load('ViT-B/16', device)
-        self.featurizer=model.float()
-        self.featurizer.head=nn.Identity()
+        self.featurizer=model.float().visual
+        # self.featurizer.head=nn.Identity()
         # self.featurizer = networks.ViT(input_shape, self.hparams,num_classes)
         # if(self.hparams['weight_init']=="clip"):
         #     self.featurizer.network.proj=None
@@ -143,7 +143,6 @@ class ERM_ViT_classifier_learning(Algorithm):
             num_classes,
             self.hparams['nonlinear_classifier'])
         self.network = nn.Sequential(self.featurizer, self.classifier)
-        printNetworkParams(self.network)
         self.optimizer = torch.optim.AdamW(
             self.network.parameters(),
             lr=self.hparams["lr"],
