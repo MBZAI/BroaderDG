@@ -28,6 +28,7 @@ def format_mean(data, latex):
     standard error"""
     if len(data) == 0:
         return None, None, "X"
+    print(data)
     mean = 100 * np.mean(list(data))
     err = 100 * np.std(list(data) / np.sqrt(len(data)))
     if latex:
@@ -71,7 +72,7 @@ def print_results_tables(records, selection_method, latex):
     grouped_records = reporting.get_grouped_records(records).map(lambda group:
         { **group, "sweep_acc": selection_method.sweep_acc(group["records"]) }
     ).filter(lambda g: g["sweep_acc"] is not None)
-
+ 
     # read algorithm names and sort (predefined order)
     alg_names = Q(records).select("args.algorithm").unique()
     alg_names = ([n for n in algorithms.ALGORITHMS if n in alg_names] +
@@ -79,6 +80,7 @@ def print_results_tables(records, selection_method, latex):
 
     # read dataset names and sort (lexicographic order)
     dataset_names = Q(records).select("args.dataset").unique().sorted()
+
     dataset_names = [d for d in datasets.DATASETS if d in dataset_names]
 
     for dataset in dataset_names:
@@ -148,13 +150,16 @@ if __name__ == "__main__":
         description="Domain generalization testbed")
     parser.add_argument("--input_dir", type=str, required=True)
     parser.add_argument("--latex", action="store_true")
+    parser.add_argument('--test_post_results', type=bool, default=False)
+    parser.add_argument('--get_recursively',type=bool, default=False)
     args = parser.parse_args()
-
-    results_file = "results.tex" if args.latex else "results.txt"
-
+    if(args.test_post_results):
+        results_file = "results_test.tex" if args.latex else "results_test.txt"
+    else:
+        results_file = "results.tex" if args.latex else "results.txt"
     sys.stdout = misc.Tee(os.path.join(args.input_dir, results_file), "w")
 
-    records = reporting.load_records(args.input_dir)
+    records = reporting.load_records(args.input_dir,test_post_results=args.test_post_results,get_recursively=args.get_recursively)
 
     if args.latex:
         print("\\documentclass{article}")
@@ -168,8 +173,8 @@ if __name__ == "__main__":
 
     SELECTION_METHODS = [
         model_selection.IIDAccuracySelectionMethod,
-        model_selection.LeaveOneOutSelectionMethod,
-        model_selection.OracleSelectionMethod,
+        # model_selection.LeaveOneOutSelectionMethod,
+        # model_selection.OracleSelectionMethod,
     ]
 
     for selection_method in SELECTION_METHODS:

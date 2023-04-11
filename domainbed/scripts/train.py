@@ -98,6 +98,7 @@ if __name__ == "__main__":
     if args.dataset in vars(datasets):
         dataset = vars(datasets)[args.dataset](args.data_dir,
             args.test_envs, hparams)
+        misc.Class_names=dataset.Class_names
     else:
         raise NotImplementedError
 

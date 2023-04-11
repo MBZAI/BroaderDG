@@ -15,6 +15,10 @@ import torch
 from collections import Counter
 from itertools import cycle
 
+Class_names=[]
+Train_class_names=[]
+class_change=[]
+Test_class_names=[]
 
 def distance(h1, h2):
     ''' distance of two networks (h1, h2 are classifiers)'''

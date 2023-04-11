@@ -1,9 +1,9 @@
 #!/bin/bash
-#SBATCH --job-name=eye_clip_train
-#SBATCH --gres gpu:6
+#SBATCH --job-name=eye_
+#SBATCH --gres gpu:1
 #SBATCH --nodes 1
-#SBATCH --cpus-per-task=30
-#SBATCH --partition=multigpu
+#SBATCH --cpus-per-task=5
+#SBATCH --partition=default-short
 
 
 
@@ -31,7 +31,7 @@
 nvidia-smi
 
 
-# for lr in 0.000005 0.000002 0.000001 
+# for lr in  0.000002 0.000001 0.000005
 # do
 #     for dataset in DR
 #     do
@@ -41,64 +41,43 @@ nvidia-smi
 #             do
 #                 python -m domainbed.scripts.sweep $command\
 #                     --data_dir=/nfs/users/ext_group8/Dataset/224_data/ \
-#                     --output_dir=./domainbed/Outputs/ERM_ViT_learning_probing-CLIP/${lr}\
+#                     --output_dir=./domainbed/Outputs/Eye_resnet-ERM_ViT_classifier_learning/${lr}\
 #                     --command_launcher multi_gpu\
-#                     --algorithms ERM_ViT_learning_probing \
+#                     --algorithms ERM_ViT_classifier_learning \
 #                     --single_test_envs \
 #                     --datasets ${dataset} \
 #                     --n_hparams 1  \
 #                     --n_trials 3 \
 #                     --hparams """{\"lr\":${lr}}"""\
 #                     --skip_confirmation  
-#             done > Outs/ERM_ViT_learning_probing-CLIP.out
+#             done > Outs/ERM_ViT_classifier_learning.out
 #         done
 #     done
 # done
 
-# for lr in 0.000005 0.000002 0.000001 
-# do
-#     for dataset in DR
-#     do
-#         for init in clip_full
-#         do
-#             for command in delete_incomplete launch
-#             do
-#                 python -m domainbed.scripts.sweep $command\
-#                     --data_dir=/nfs/users/ext_group8/Dataset/224_data/ \
-#                     --output_dir=./domainbed/Outputs/Clip_train-CLIP/${lr}\
-#                     --command_launcher multi_gpu\
-#                     --algorithms Clip_train \
-#                     --single_test_envs \
-#                     --datasets ${dataset} \
-#                     --n_hparams 1  \
-#                     --n_trials 3 \
-#                     --hparams """{\"lr\":${lr}}"""\
-#                     --skip_confirmation  
-#             done > Outs/Clip_train-CLIP.out
-#         done
-#     done
-# done
-
-for lr in 0.00005 0.000005 0.000002 0.000001 
+for lr in 0.000005
 do
     for dataset in DR
     do
-        for init in ImageNet
+        for init in clip_full
         do
             for command in delete_incomplete launch
             do
                 python -m domainbed.scripts.sweep $command\
                     --data_dir=/nfs/users/ext_group8/Dataset/224_data/ \
-                    --output_dir=./domainbed/Outputs/ERM_ViT-Deitbase/${lr}\
+                    --output_dir=./domainbed/Outputs/Clip_zero/${lr}\
                     --command_launcher multi_gpu\
-                    --algorithms ERM_ViT \
+                    --algorithms Clip_zero \
                     --single_test_envs \
                     --datasets ${dataset} \
                     --n_hparams 1  \
-                    --n_trials 3 \
-                    --hparams """{\"weight_init\":\"${init}\",\"backbone\":\"ResNet50\",\"lr\":${lr}}"""\
+                    --n_trials 1 \
+                    --steps 3\
+                    --hparams """{\"lr\":${lr}}"""\
                     --skip_confirmation  
-            done > Outs/ERM_ViT-deitbase.out
+            done > Outs/Clip_zero.out
         done
     done
 done
+
+

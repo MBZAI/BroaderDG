@@ -6,3 +6,4 @@ train_output/*
 domainbed/Outputs/*
 
 Outs/*
+*.out

@@ -28,10 +28,10 @@ DATASETS = [
     "TerraIncognita",
     "DomainNet",
     "SVIRO",
+    "DR",
     # WILDS datasets
     "WILDSCamelyon",
-    "WILDSFMoW",
-    "EyePACS"
+    "WILDSFMoW"
 ]
 
 def get_dataset_class(dataset_name):
@@ -65,13 +65,13 @@ class Debug(MultipleDomainDataset):
         self.input_shape = self.INPUT_SHAPE
         self.num_classes = 2
         self.datasets = []
-        for _ in [0, 1, 2]:
+        for _ in [0, 1, 2]: #domains list
             self.datasets.append(
                 TensorDataset(
                     torch.randn(16, *self.INPUT_SHAPE),
                     torch.randint(0, self.num_classes, (16,))
                 )
-            )
+            ) # append one dataset for the considered domain. say, 16 images, along with their labels
 
 class Debug28(Debug):
     INPUT_SHAPE = (3, 28, 28)
@@ -180,44 +180,52 @@ class RotatedMNIST(MultipleEnvironmentMNIST):
 class MultipleEnvironmentImageFolder(MultipleDomainDataset):
     def __init__(self, root, test_envs, augment, hparams):
         super().__init__()
-        # environments = [f.name for f in os.scandir(root) if f.is_dir()]
-        # environments = sorted(environments)
-        # self.environments = environments
-        # print(environments)
-
-        # self.datasets = []
-        # for environment in environments:
-        #     path = os.path.join(root, environment)
-        #     print(path)
-        #     env_dataset = ImageFolder(path)
-
-        #     self.datasets.append(env_dataset)
-
-        # self.input_shape = (3, 224, 224)
-        # self.num_classes = len(self.datasets[-1].classes)
-        
         environments = [f.name for f in os.scandir(root) if f.is_dir()]
-        environments = sorted(environments)
+        environments = sorted(environments) # list of all domains in the dataset, in sorted order
 
-        transform = transforms.Compose([
-            transforms.Resize((224,224)),
-            transforms.ToTensor(),
-            transforms.Normalize(
-                mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
-        ])
+        # TODO move this to a transforms.py to use Domainbed default augmentation vs DR specific transforms
+        # transform = transforms.Compose([
+        #     transforms.Resize((224,224)),
+        #     transforms.ToTensor(),
+        #     transforms.Normalize(
+        #         mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+        # ])
+
+        # augment_transform = transforms.Compose([
+        #     # transforms.Resize((224,224)),
+        #     transforms.RandomResizedCrop(224, scale=(0.7, 1.0)),
+        #     transforms.RandomHorizontalFlip(),
+        #     transforms.ColorJitter(0.3, 0.3, 0.3, 0.3),
+        #     transforms.RandomGrayscale(),
+        #     transforms.ToTensor(),
+        #     transforms.Normalize(
+        #         mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+        # ])
+
+        transform = transforms.Compose(
+            [
+                # T.Resize((224, 224)),
+                transforms.ToTensor(),
+                transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+            ]
+        )
 
         augment_transform = transforms.Compose([
-            # transforms.Resize((224,224)),
-            transforms.RandomResizedCrop(224, scale=(0.9, 1.0)),
+            transforms.RandomResizedCrop(224,scale=(0.8, 1.2),ratio=(0.8,1.2)),
             transforms.RandomHorizontalFlip(),
-            transforms.ColorJitter(0.3, 0.3, 0.3, 0.3),
-            transforms.RandomGrayscale(),
+            transforms.RandomVerticalFlip(),
+            transforms.ColorJitter(0.4, 0.4, 0.4, 0.1),
+            transforms.RandomGrayscale(p=0.2),
+            transforms.RandomAffine(degrees=(-180,180),
+                    translate=(0.2,0.2)),
+            transforms.GaussianBlur(kernel_size=7, sigma=0.5),
             transforms.ToTensor(),
-            transforms.Normalize(
-                mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+            transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
         ])
 
         self.datasets = []
+        path_for_cls = os.path.join(root, environments[0])
+        self.Class_names=sorted(os.listdir(path_for_cls))
         for i, environment in enumerate(environments):
 
             if augment and (i not in test_envs):
@@ -228,26 +236,36 @@ class MultipleEnvironmentImageFolder(MultipleDomainDataset):
             path = os.path.join(root, environment)
             env_dataset = ImageFolder(path,
                 transform=env_transform)
-
+            ################################ Code required for RCERM ################################ 
+            # env_dataset: <class 'torchvision.datasets.folder.ImageFolder'>, 
+            # Dataset ImageFolder
+            #     Number of datapoints: 2050
+            #     Root location: ../../DG/DomainBed/domainbed/data/PACS/art_painting
+            # Dataset ImageFolder
+            #     Number of datapoints: 2345
+            #     Root location: ../../DG/DomainBed/domainbed/data/PACS/cartoon
+            # Dataset ImageFolder
+            #     Number of datapoints: 1671
+            #     Root location: ../../DG/DomainBed/domainbed/data/PACS/photo
+            # Dataset ImageFolder
+            #     Number of datapoints: 3934
+            #     Root location: ../../DG/DomainBed/domainbed/data/PACS/sketch
+            # access it via:
+            ################################ Code required for RCERM ################################ 
             self.datasets.append(env_dataset)
+            ################################ Code required for RCERM ################################ 
+#             # env_dataset containst first all elts of class 0, then class 1, ...class C-1
+#             for (batch_idx, sample_batched) in enumerate(self.datasets[i]):
+#             ###     if batch_idx==1:
+#             ###         break
+#                 print('im ',batch_idx,' :',sample_batched)
+#                 ## eg, im  0  : (<PIL.Image.Image image mode=RGB size=227x227 at 0x7FB44448C430>, 0)
+            ################################ Code required for RCERM ################################ 
+
+            
 
         self.input_shape = (3, 224, 224,)
         self.num_classes = len(self.datasets[-1].classes)
-
-class EyePACS(MultipleEnvironmentImageFolder):
-    CHECKPOINT_FREQ = 300
-    ENVIRONMENTS = ["train", "test"]
-    def __init__(self, root, test_envs, hparams):
-        self.dir = os.path.join(root, "EyePACS/")
-        super().__init__(self.dir, test_envs, hparams['data_augmentation'], hparams)
-
-class DR(MultipleEnvironmentImageFolder):
-    CHECKPOINT_FREQ = 200
-    ENVIRONMENTS = ["aptos", "eyepacs", "messidor", "messidor_2"]
-
-    def __init__(self, root, test_envs, hparams):
-        self.dir = os.path.join(root, "DR/")
-        super().__init__(self.dir, test_envs, hparams['data_augmentation'], hparams)
 
 class VLCS(MultipleEnvironmentImageFolder):
     CHECKPOINT_FREQ = 300
@@ -283,6 +301,15 @@ class TerraIncognita(MultipleEnvironmentImageFolder):
     def __init__(self, root, test_envs, hparams):
         self.dir = os.path.join(root, "terra_incognita/")
         super().__init__(self.dir, test_envs, hparams['data_augmentation'], hparams)
+
+class DR(MultipleEnvironmentImageFolder):
+    CHECKPOINT_FREQ = 300
+    ENVIRONMENTS = ["aptos", "eyepacs", "messidor", "messidor_2"]
+    
+    def __init__(self, root, test_envs, hparams):
+        self.dir = os.path.join(root, "DR/")
+        super().__init__(self.dir, test_envs, hparams['data_augmentation'], hparams)
+        self.Class_names=["No DR","mild DR", "moderate DR", "severe DR", "proliferative DR"]
 
 class SVIRO(MultipleEnvironmentImageFolder):
     CHECKPOINT_FREQ = 300
