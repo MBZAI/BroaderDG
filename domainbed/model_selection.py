@@ -99,6 +99,60 @@ class IIDAccuracySelectionMethod(SelectionMethod):
             return None
         return test_records.map(self._step_acc).argmax('val_acc')
 
+class IIDF1MacroSelectionMethod(SelectionMethod):
+    """Picks argmax(mean(env_out_f1m for env in train_envs))"""
+    name = "training-domain validation set"
+
+    @classmethod
+    def _step_acc(self, record):
+        """Given a single record, return a {val_f1m, test_f1m} dict."""
+        test_env = record['args']['test_envs'][0]
+        val_env_keys = []
+        for i in itertools.count():
+            if f'env{i}_out_f1m' not in record:
+                break
+            if i != test_env:
+                val_env_keys.append(f'env{i}_out_f1m')
+        test_in_acc_key = 'env{}_in_f1m'.format(test_env)
+        return {
+            'val_acc': np.mean([record[key] for key in val_env_keys]),
+            'test_acc': record[test_in_acc_key]
+        }
+
+    @classmethod
+    def run_acc(self, run_records):
+        test_records = get_test_records(run_records)
+        if not len(test_records):
+            return None
+        return test_records.map(self._step_acc).argmax('val_acc')
+
+class IIDF1WeightedSelectionMethod(SelectionMethod):
+    """Picks argmax(mean(env_out_f1w for env in train_envs))"""
+    name = "training-domain validation set"
+
+    @classmethod
+    def _step_acc(self, record):
+        """Given a single record, return a {val_f1w, test_f1w} dict."""
+        test_env = record['args']['test_envs'][0]
+        val_env_keys = []
+        for i in itertools.count():
+            if f'env{i}_out_f1w' not in record:
+                break
+            if i != test_env:
+                val_env_keys.append(f'env{i}_out_f1w')
+        test_in_acc_key = 'env{}_in_f1w'.format(test_env)
+        return {
+            'val_acc': np.mean([record[key] for key in val_env_keys]),
+            'test_acc': record[test_in_acc_key]
+        }
+
+    @classmethod
+    def run_acc(self, run_records):
+        test_records = get_test_records(run_records)
+        if not len(test_records):
+            return None
+        return test_records.map(self._step_acc).argmax('val_acc')
+
 class LeaveOneOutSelectionMethod(SelectionMethod):
     """Picks (hparams, step) by leave-one-out cross validation."""
     name = "leave-one-domain-out cross-validation"

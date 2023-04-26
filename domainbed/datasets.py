@@ -31,7 +31,8 @@ DATASETS = [
     # WILDS datasets
     "WILDSCamelyon",
     "WILDSFMoW",
-    "EyePACS"
+    "EyePACS",
+    "DR",
 ]
 
 def get_dataset_class(dataset_name):

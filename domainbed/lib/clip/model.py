@@ -302,10 +302,11 @@ class CLIP(nn.Module):
                  vocab_size: int,
                  transformer_width: int,
                  transformer_heads: int,
-                 transformer_layers: int
-                 ):
+                 transformer_layers: int,
+                 prompt_tuning=False):
         super().__init__()
-
+        self.prompt_tuning=prompt_tuning
+        print(prompt_tuning,"*"*100)
         self.context_length = context_length
         print("transformer_width:",transformer_width,";transformer_layers:",transformer_layers,";transformer_heads:",transformer_heads)
         if isinstance(vision_layers, (tuple, list)):
@@ -327,12 +328,14 @@ class CLIP(nn.Module):
                 heads=vision_heads,
                 output_dim=embed_dim
             )
-
+        if self.prompt_tuning:
+            self.prompt_token=4
+            # self.transfer_fn = nn.Linear(768,4*512)
         self.transformer = Transformer(
             width=transformer_width,
             layers=transformer_layers,
             heads=transformer_heads,
-            attn_mask=self.build_attention_mask()
+            attn_mask=self.build_attention_mask(prompt_tuning=self.prompt_tuning)
         )
 
         self.vocab_size = vocab_size
@@ -344,6 +347,8 @@ class CLIP(nn.Module):
         self.logit_scale = nn.Parameter(torch.ones([]) * np.log(1 / 0.07))
 
         self.initialize_parameters()
+        # print(embed_dim, '--'*100)
+        
 
     def initialize_parameters(self):
         nn.init.normal_(self.token_embedding.weight, std=0.02)
@@ -375,10 +380,13 @@ class CLIP(nn.Module):
         if self.text_projection is not None:
             nn.init.normal_(self.text_projection, std=self.transformer.width ** -0.5)
 
-    def build_attention_mask(self):
+    def build_attention_mask(self,prompt_tuning=False):
         # lazily create causal attention mask, with full attention between the vision tokens
         # pytorch uses additive attention mask; fill with -inf
-        mask = torch.empty(self.context_length, self.context_length)
+        if(prompt_tuning):
+            mask = torch.empty(self.context_length+self.prompt_token, self.context_length+self.prompt_token)
+        else:
+            mask = torch.empty(self.context_length, self.context_length)
         mask.fill_(float("-inf"))
         mask.triu_(1)  # zero out the lower diagonal
         return mask
@@ -390,7 +398,7 @@ class CLIP(nn.Module):
     def encode_image(self, image,cfg={}):
         return self.visual(image.type(self.dtype),**cfg)
 
-    def encode_text(self, text,no_embed=False,EOS_pos=None,cfg={}):
+    def encode_text(self, text,no_embed=False,EOS_pos=None,cfg={},image_features=None,transfer_fn=None):
         if(no_embed==False):
             x = self.token_embedding(text).type(self.dtype)  # [batch_size, n_ctx, d_model]
             # print("text",text.shape)
@@ -400,9 +408,15 @@ class CLIP(nn.Module):
             x=text.type(self.dtype)
             EOS_pos=EOS_pos
             # print("else:",x.shape)
+        if image_features is not None:
+            image_inputs = transfer_fn(image_features)
+            image_inputs = image_inputs.reshape(x.shape[0], self.prompt_token,-1)
         x = x + self.positional_embedding.type(self.dtype)
+        if image_features is not None:
+            # print(image_features.shape, x.shape, image_inputs.shape)
+            x = torch.cat((x, image_inputs), 1) ###
         x = x.permute(1, 0, 2)  # NLD -> LND
-        x = self.transformer(x,**cfg)
+        x = self.transformer(x, **cfg)
         x = x.permute(1, 0, 2)  # LND -> NLD
         x = self.ln_final(x).type(self.dtype)
 
@@ -453,7 +467,7 @@ def convert_weights(model: nn.Module):
     model.apply(_convert_weights_to_fp16)
 
 
-def build_model(state_dict: dict,scratch=False):
+def build_model(state_dict: dict,scratch=False,prompt_tuning=False):
     vit = "visual.proj" in state_dict
 
     if vit:
@@ -481,7 +495,7 @@ def build_model(state_dict: dict,scratch=False):
     model = CLIP(
         embed_dim,
         image_resolution, vision_layers, vision_width, vision_patch_size,
-        context_length, vocab_size, transformer_width, transformer_heads, transformer_layers
+        context_length, vocab_size, transformer_width, transformer_heads, transformer_layers,prompt_tuning=prompt_tuning
     )
 
     for key in ["input_resolution", "context_length", "vocab_size"]:

@@ -8,7 +8,7 @@
 nvidia-smi
 
 
-for lr in  0.000005 
+for lr in  0.00005 
 do
     for dataset in DR
     do
@@ -18,16 +18,16 @@ do
             do
                 python -m domainbed.scripts.sweep $command\
                     --data_dir=/nfs/users/ext_group8/Dataset/224_data/ \
-                    --output_dir=./domainbed/Outputs/Eye_resnet-ERM_ViT_classifier_learning-lr${lr}\
+                    --output_dir=./domainbed/Outputs/Eye_resnet-check-lr${lr}\
                     --command_launcher multi_gpu\
-                    --algorithms ERM_ViT_classifier_learning \
+                    --algorithms ERM \
                     --single_test_envs \
                     --datasets ${dataset} \
                     --n_hparams 1  \
                     --n_trials 1 \
                     --hparams """{\"lr\":${lr}}"""\
                     --skip_confirmation  
-            done > Outs/ERM_ViT_classifier_learning.out
+            done > Outs/ERM_check.out
         done
     done
 done
