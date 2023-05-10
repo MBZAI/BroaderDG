@@ -998,7 +998,7 @@ class Clip_train_prompt_from_image_prompt_only(Algorithm):
 
 class Clip_train_prompt_from_image_v2(Algorithm):
     """
-    Empirical Risk Minimization (ERM)
+    CoOpLVT: Context Optimization with Learnable Visual Tokens
     """
     
     def __init__(self, input_shape, num_classes, num_domains, hparams, weights_for_balance):

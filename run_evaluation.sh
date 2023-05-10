@@ -1,1 +1,1 @@
-python -m domainbed.scripts.collect_results --input_dir domainbed/Outputs/V23_CLIP_COOP_3_LAYERS_MLP
+python -m domainbed.scripts.collect_results --input_dir COOPLVT_TRAINING_LOGS
