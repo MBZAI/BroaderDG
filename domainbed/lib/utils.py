@@ -55,7 +55,7 @@ def get_model(args, pretrained=True):
         model = models.__dict__[args.model_name](pretrained=pretrained)
         mean = (0.485, 0.456, 0.406)
         std = (0.229, 0.224, 0.225)
-    elif args.model_name in ALGORITHMS:
+    elif True:
 
         fname = args.pretrained_weights
         model1 = torch.load(fname)
@@ -64,8 +64,8 @@ def get_model(args, pretrained=True):
             model1["model_input_shape"],
             model1["model_num_classes"],
             model1["model_num_domains"],
-            model1["model_hparams"])
-        algorithm.load_state_dict(model1["model_dict"],strict=False)
+            model1["model_hparams"], None)
+        algorithm.load_state_dict(model1["model_dict"],strict=True)
         try:
             model = algorithm.featurizer
         except:
@@ -74,7 +74,6 @@ def get_model(args, pretrained=True):
         mean = (0.485, 0.456, 0.406)
         std = (0.229, 0.224, 0.225)
 
-     
     # elif 'resnet_drop' in args.model_name:
     #     model = vit_models.drop_resnet50(pretrained=True)
     #     mean = (0.485, 0.456, 0.406)
