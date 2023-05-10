@@ -25,7 +25,7 @@ The dataset can be accessed in G42 cluster, more specifically in `/nfs/users/ext
 
 ## Download Pre-trained Weights
 
-
+The pre-trained weights can be accessed [here](https://drive.google.com/drive/folders/1w9gG3clV3ZlmhIT88n0QFNM29_rOou8Y?usp=sharing).
 
 ## CoOpLVT Algorithm Implementation
 
