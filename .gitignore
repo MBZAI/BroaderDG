@@ -6,3 +6,5 @@ train_output/*
 domainbed/Outputs/*
 
 Outs/*
+domainbed/misc/test_sweep_data/*
+

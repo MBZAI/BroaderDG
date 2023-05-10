@@ -303,7 +303,8 @@ class CLIP(nn.Module):
                  transformer_width: int,
                  transformer_heads: int,
                  transformer_layers: int,
-                 prompt_tuning=False):
+                 prompt_tuning=False,
+                 n_prompts=4):
         super().__init__()
         self.prompt_tuning=prompt_tuning
         print(prompt_tuning,"*"*100)
@@ -329,7 +330,8 @@ class CLIP(nn.Module):
                 output_dim=embed_dim
             )
         if self.prompt_tuning:
-            self.prompt_token=4
+            # self.prompt_token=4
+            self.prompt_token = n_prompts
             # self.transfer_fn = nn.Linear(768,4*512)
         self.transformer = Transformer(
             width=transformer_width,
@@ -349,6 +351,9 @@ class CLIP(nn.Module):
         self.initialize_parameters()
         # print(embed_dim, '--'*100)
         
+        # print(self.prompt_token, 'ADAM'*100)
+        # import sys
+        # sys.exit(0)
 
     def initialize_parameters(self):
         nn.init.normal_(self.token_embedding.weight, std=0.02)
@@ -467,7 +472,7 @@ def convert_weights(model: nn.Module):
     model.apply(_convert_weights_to_fp16)
 
 
-def build_model(state_dict: dict,scratch=False,prompt_tuning=False):
+def build_model(state_dict: dict,scratch=False,prompt_tuning=False,n_prompts=4):
     vit = "visual.proj" in state_dict
 
     if vit:
@@ -495,7 +500,8 @@ def build_model(state_dict: dict,scratch=False,prompt_tuning=False):
     model = CLIP(
         embed_dim,
         image_resolution, vision_layers, vision_width, vision_patch_size,
-        context_length, vocab_size, transformer_width, transformer_heads, transformer_layers,prompt_tuning=prompt_tuning
+        context_length, vocab_size, transformer_width, transformer_heads, transformer_layers,prompt_tuning=prompt_tuning,
+        n_prompts=n_prompts
     )
 
     for key in ["input_resolution", "context_length", "vocab_size"]:

@@ -1,27 +1,0 @@
-Wed Apr 26 04:13:35 2023       
-+-----------------------------------------------------------------------------+
-| NVIDIA-SMI 450.119.04   Driver Version: 450.119.04   CUDA Version: 11.0     |
-|-------------------------------+----------------------+----------------------+
-| GPU  Name        Persistence-M| Bus-Id        Disp.A | Volatile Uncorr. ECC |
-| Fan  Temp  Perf  Pwr:Usage/Cap|         Memory-Usage | GPU-Util  Compute M. |
-|                               |                      |               MIG M. |
-|===============================+======================+======================|
-|   0  Tesla V100-SXM3...  On   | 00000000:3B:00.0 Off |                    0 |
-| N/A   46C    P0    53W / 350W |      0MiB / 32510MiB |      0%      Default |
-|                               |                      |                  N/A |
-+-------------------------------+----------------------+----------------------+
-                                                                               
-+-----------------------------------------------------------------------------+
-| Processes:                                                                  |
-|  GPU   GI   CI        PID   Type   Process name                  GPU Memory |
-|        ID   ID                                                   Usage      |
-|=============================================================================|
-|  No running processes found                                                 |
-+-----------------------------------------------------------------------------+
-WARNING:root:The WILDS package is out of date. Your version is 1.2.2, while the latest version is 2.0.0.
-WARNING:root:The WILDS package is out of date. Your version is 1.2.2, while the latest version is 2.0.0.
-  0%|          | 0/4 [00:00<?, ?it/s] 75%|███████▌  | 3/4 [00:00<00:00, 27.99it/s]                                             WARNING:root:The WILDS package is out of date. Your version is 1.2.2, while the latest version is 2.0.0.
-WARNING:root:The WILDS package is out of date. Your version is 1.2.2, while the latest version is 2.0.0.
-WARNING:root:The WILDS package is out of date. Your version is 1.2.2, while the latest version is 2.0.0.
-WARNING:root:The WILDS package is out of date. Your version is 1.2.2, while the latest version is 2.0.0.
-slurmstepd: error: *** JOB 75920 ON p3-r56-b.g42cloud.net CANCELLED AT 2023-04-26T04:36:48 ***

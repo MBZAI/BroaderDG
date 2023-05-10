@@ -7,6 +7,7 @@ import torchvision.models
 
 from domainbed.lib import wide_resnet
 import copy
+from domainbed.lib.visiontransformer import *
 
 
 def remove_batch_norm_from_resnet(model):
@@ -205,6 +206,190 @@ def Classifier(in_features, out_features, is_nonlinear=False):
             torch.nn.Linear(in_features // 4, out_features))
     else:
         return torch.nn.Linear(in_features, out_features)
+
+class ViT(torch.nn.Module):
+    """ResNet with the softmax chopped off and the batchnorm frozen"""
+    def __init__(self, input_shape, hparams,num_classes):
+        super(ViT, self).__init__()
+        if hparams['weight_init']=="ImageNet":
+            if hparams['backbone']=="DeitSmall":
+                self.network = deit_small_patch16_224(pretrained=True)
+                self.network.head = nn.Linear(384, num_classes)
+                self.n_outputs = 384
+            elif hparams['backbone']=="CVTSmall":
+                self.network = small_cvt(pretrained=True)
+                self.network.head = nn.Linear(384, num_classes)
+            elif hparams['backbone']=="DeitBase":
+                self.network = deit_base_patch16_224(pretrained=True)
+                self.network.head = nn.Linear(768, num_classes)
+                self.n_outputs = 768
+            elif hparams['backbone']=="DeitBase_dist":
+                self.network = deit_base_distilled_patch16_224(pretrained=True)
+                self.network.head = nn.Linear(768, num_classes)
+                self.network.head_dist = nn.Linear(768, num_classes)
+                self.n_outputs = 768
+            
+            else:
+                raise NotImplementedError
+        elif hparams['weight_init']=="ImageNet21k":
+            if hparams['backbone']=="VitBase":
+                self.network = vit_base_patch16_224_in21k(pretrained=True)
+                self.network.head = nn.Linear(768, num_classes)
+            else:
+                raise NotImplementedError
+        elif hparams['weight_init']=="Dino":
+            if hparams['backbone']=="DeitSmall":
+                self.network = load_dino("DinoSmall",num_classes=num_classes)
+                self.n_outputs = 384
+                # self.network.head = nn.Linear(384, num_classes)
+            elif hparams['backbone']=="DeitBase":
+                self.network = load_dino("DinoBase",num_classes=num_classes)
+                self.n_outputs = 768
+                # self.network.head = nn.Linear(768, num_classes)
+            else:
+                raise NotImplementedError
+        elif hparams['weight_init']=="clip":
+            if hparams['backbone']=="DeitBase":
+                device = "cuda" if torch.cuda.is_available() else "cpu"
+                model, preprocess = clip.load('ViT-B/16', device)
+                # model=model.float()
+                self.network=model.visual.float()
+                
+                self.network.proj=nn.Parameter(0.03608439182435161 * torch.randn(768, num_classes))
+                self.n_outputs = 768
+                # self.network.proj==None
+            else:
+                raise NotImplementedError       
+        elif hparams['weight_init']=="clip_full":
+            if hparams['backbone']=="DeitBase":
+                device = "cuda" if torch.cuda.is_available() else "cpu"
+                model, preprocess = clip.load('ViT-B/16', device)
+                # model=model.float()
+                self.network=model.float()
+                self.n_outputs = 768
+                # self.network.proj=nn.Parameter(0.03608439182435161 * torch.randn(768, num_classes))
+                # self.network.proj==None
+            elif hparams['backbone']=="Resnet50":
+                device = "cuda" if torch.cuda.is_available() else "cpu"
+                model, preprocess = clip.load('RN50', device)
+                # model=model.float()
+                self.network=model.float()
+                self.n_outputs = 1024
+                # self.network.proj=nn.Parameter(0.03608439182435161 * torch.randn(768, num_classes))
+                # self.network.proj==None
+            else:
+                raise NotImplementedError     
+        elif hparams['weight_init']=="clip_scratch":
+            if hparams['backbone']=="DeitBase":
+                device = "cuda" if torch.cuda.is_available() else "cpu"
+                model, preprocess = clip.load('ViT-B/16', device,scratch=True)
+                # model=model.float()
+                self.network=model.float()
+                
+                # self.network.proj=nn.Parameter(0.03608439182435161 * torch.randn(768, num_classes))
+                # self.network.proj==None
+            else:
+                raise NotImplementedError   
+        
+        elif hparams['weight_init']=="Random":
+            if hparams['backbone']=="DeitSmall":
+                self.network = deit_small_patch16_224(pretrained=False)
+                self.network.head = nn.Linear(384, num_classes)
+            elif hparams['backbone']=="CVTSmall":
+                self.network = small_cvt(pretrained=False)
+                self.network.head = nn.Linear(384, num_classes)
+            elif hparams['backbone']=="DeitBase":
+                self.network = deit_base_patch16_224(pretrained=False)
+                self.network.head = nn.Linear(768, num_classes)
+            else:
+                raise NotImplementedError
+        elif hparams['weight_init']=="xavier_uniform":
+            if hparams['backbone']=="DeitSmall":
+                self.network = deit_small_patch16_224(pretrained=False,weight_init='xavier')
+                self.n_outputs = 384
+                self.network.head = Classifier(self.n_outputs, num_classes,init=hparams['weight_init'])
+                
+            elif hparams['backbone']=="CVTSmall":
+                self.network = small_cvt(pretrained=False,init="xavier")
+                self.network.head = nn.Linear(384, num_classes)
+            else:
+                raise NotImplementedError
+            self.apply(self._init_weights_xavier_uniform)
+        elif hparams['weight_init']=="gradinit":
+            if hparams['backbone']=="DeitSmall":
+                self.network = deit_small_patch16_224(pretrained=False)
+                self.n_outputs = 384
+                self.network.head = Classifier(self.n_outputs, num_classes,init=hparams['weight_init'])
+            elif hparams['backbone']=="CVTSmall":
+                self.network = small_cvt(pretrained=False)
+                self.network.head = nn.Linear(384, num_classes)
+            else:
+                raise NotImplementedError
+            ginit = GradInitWrapper(self.network)
+            ginit.detach() 
+        elif hparams['weight_init']=="trunc_normal":
+            if hparams['backbone']=="DeitSmall":
+                self.network = deit_small_patch16_224(pretrained=False)
+                self.n_outputs = 384
+                self.network.head = Classifier(self.n_outputs, num_classes,init=hparams['weight_init'])
+            elif hparams['backbone']=="CVTSmall":
+                self.network = small_cvt(pretrained=False,init="xavier")
+                self.network.head = nn.Linear(384, num_classes)
+            else:
+                raise NotImplementedError
+            self.apply(self._init_weights_trunc_normal)
+        elif hparams['weight_init']=="kaiming_normal":
+            if hparams['backbone']=="DeitSmall":
+                self.network = deit_small_patch16_224(pretrained=False)
+                self.n_outputs = 384
+                self.network.head = Classifier(self.n_outputs, num_classes,init=hparams['weight_init'])
+            elif hparams['backbone']=="CVTSmall":
+                self.network = small_cvt(pretrained=False,init="xavier")
+                self.network.head = nn.Linear(384, num_classes)
+            else:
+                raise NotImplementedError
+            self.apply(self._init_weights_kaiming_normal)
+        # self.network = remove_batch_norm_from_resnet(self.network)
+
+        self.freeze_bn()
+        self.hparams = hparams
+        self.dropout = nn.Dropout(hparams['resnet_dropout'])
+
+    def _init_weights_xavier_uniform(self, module):
+        if isinstance(module, nn.Linear):
+            torch.nn.init.xavier_uniform_(module.weight)
+           
+    def _init_weights_uniform(self, module):
+        if isinstance(module, nn.Linear):
+            torch.nn.init.uniform_(module.weight)
+            if module.bias is not None:
+                torch.nn.init.uniform_(module.bias)
+
+    def _init_weights_trunc_normal(self, module):
+        if isinstance(module, nn.Linear):
+            torch.nn.init.trunc_normal_(module.weight,std=.02)
+            if module.bias is not None:
+                torch.nn.init.trunc_normal_(module.bias,std=.02)
+    def _init_weights_kaiming_normal(self, module):
+        if isinstance(module, nn.Linear):
+            torch.nn.init.kaiming_normal_(module.weight)
+    def forward(self, x):
+        """Encode x into a feature vector of size n_outputs."""
+        # return self.dropout(self.network(x))
+        return self.network(x)
+
+    def train(self, mode=True):
+        """
+        Override the default train() to freeze the BN parameters
+        """
+        super().train(mode)
+        self.freeze_bn()
+
+    def freeze_bn(self):
+        for m in self.network.modules():
+            if isinstance(m, nn.BatchNorm2d):
+                m.eval()
+
 
 
 class WholeFish(nn.Module):

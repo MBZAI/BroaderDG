@@ -225,9 +225,9 @@ class ERM_ViT(Algorithm):
     Empirical Risk Minimization (ERM)
     """
 
-    def __init__(self, input_shape, num_classes, num_domains, hparams):
+    def __init__(self, input_shape, num_classes, num_domains, hparams,weights_for_balance):
         super(ERM_ViT, self).__init__(input_shape, num_classes, num_domains,
-                                  hparams)
+                                  hparams,weights_for_balance)
 
         self.network = networks.ViT(input_shape, self.hparams,num_classes)
         # self.classifier = networks.Classifier(768,num_classes,hparams['nonlinear_classifier'],init=hparams['weight_init']).to("cuda")
@@ -257,9 +257,9 @@ class ERM_ViT_classifier_learning(Algorithm):
     Empirical Risk Minimization (ERM)
     """
 
-    def __init__(self, input_shape, num_classes, num_domains, hparams):
+    def __init__(self, input_shape, num_classes, num_domains, hparams,weights_for_balance):
         super(ERM_ViT_classifier_learning, self).__init__(input_shape, num_classes, num_domains,
-                                  hparams)
+                                  hparams,weights_for_balance)
 
         device = "cuda" if torch.cuda.is_available() else "cpu"
         model, preprocess = clip.load('ViT-B/16', device)
@@ -301,9 +301,9 @@ class ERM_ViT_learning_probing(Algorithm):
     Empirical Risk Minimization (ERM)
     """
 
-    def __init__(self, input_shape, num_classes, num_domains, hparams):
+    def __init__(self, input_shape, num_classes, num_domains, hparams,weights_for_balance):
         super(ERM_ViT_learning_probing, self).__init__(input_shape, num_classes, num_domains,
-                                  hparams)
+                                  hparams,weights_for_balance)
 
         device = "cuda" if torch.cuda.is_available() else "cpu"
         model, preprocess = clip.load('ViT-B/16', device)
@@ -1039,6 +1039,102 @@ class Clip_train_prompt_from_image(Algorithm):
         # import sys
         # sys.exit()
         
+        text_features = self.featurizer.encode_text(text_inputs, image_features=image_features, transfer_fn=self.transfer_fn)
+        
+        image_features = image_features @ self.featurizer.visual.proj
+        
+        
+        image_features = image_features / image_features.norm(dim=1, keepdim=True)
+        text_features = text_features / text_features.norm(dim=1, keepdim=True)
+        logit_scale = self.featurizer.logit_scale.exp()
+
+        logits_per_image = logit_scale * image_features @ text_features.t()
+        logits_per_text =logits_per_image.t()
+        batch_size=len(all_y)
+        num_y=torch.arange(0,batch_size).to("cuda")
+        loss1=F.cross_entropy(logits_per_image, num_y)
+        loss2=F.cross_entropy(logits_per_text, num_y)
+        loss=loss1+loss2
+        self.optimizer.zero_grad()
+        loss.backward()
+        self.optimizer.step()
+        self.cnt+=1
+        return {'loss': loss.item()}
+
+    def predict(self, x):
+        
+        image_features = self.featurizer.encode_image(x) # (B, 768)
+        image_features_proj = image_features @ self.featurizer.visual.proj # (B, 512)
+        image_features_proj = image_features_proj / image_features_proj.norm(dim=1, keepdim=True)
+        
+        logit_scale = self.featurizer.logit_scale.exp()
+        Logits_all=[]
+        for i in range(len(self.text_inputs)):
+            text_inputs=self.text_inputs[i].expand(image_features.shape[0],-1) # (B, 77)
+            text_features = self.featurizer.encode_text(text_inputs, image_features=image_features,transfer_fn=self.transfer_fn) # b,512
+            text_features = text_features / text_features.norm(dim=1, keepdim=True) # b,512
+            logits_per_image = logit_scale * torch.sum(image_features_proj * text_features, dim=1) # b,1
+            Logits_all.append(torch.unsqueeze(logits_per_image, dim=-1))
+        Logits_all=torch.cat(Logits_all,dim=1)
+        
+        # text_features = text_features[torch.arange(text_features.shape[0]), text_inputs.argmax(dim=-1)] @ self.network.text_projection
+        
+        # cosine similarity as logits
+        
+        return Logits_all
+
+
+
+class Clip_train_prompt_from_image_prompt_only(Algorithm):
+    """
+    Empirical Risk Minimization (ERM)
+    """
+    
+    def __init__(self, input_shape, num_classes, num_domains, hparams, weights_for_balance):
+        super(Clip_train_prompt_from_image_prompt_only, self).__init__(input_shape, num_classes, num_domains,
+                                  hparams, weights_for_balance)
+
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+        self.featurizer, preprocess = clip.load('ViT-B/16', device,prompt_tuning=True)
+        self.featurizer=self.featurizer.float()
+        # if(self.hparams['weight_init']=="clip_full"):
+        #     print("clip_full")
+            # self.featurizer.network.proj=None
+
+        # printNetworkParams(self.featurizer)
+        # for param in self.featurizer.parameters():
+        #     param.requires_grad = False
+        self.transfer_fn = nn.Linear(768,4*512).to("cuda")
+        self.optimizer = torch.optim.AdamW(
+            list(self.transfer_fn.parameters()),
+            lr=self.hparams["lr"],
+            weight_decay=self.hparams['weight_decay']
+        )
+        
+        self.Class_names=["No DR","mild DR", "moderate DR", "severe DR", "proliferative DR"]
+        with torch.no_grad():
+            self.text_inputs  = torch.cat([tokenize(f"a photo of a {c}") for c in self.Class_names]).to("cuda")
+        
+        # print(self.Class_names)
+        self.cnt=0
+
+    def update(self, minibatches, unlabeled=None):
+        all_x = torch.cat([x for x,y in minibatches])
+        all_y = torch.cat([y for x,y in minibatches])
+        # with torch.no_grad():
+        #     out1 = self.predict( all_x)
+        
+        with torch.no_grad():
+            image_features = self.featurizer.encode_image(all_x)  # b,768   0,1,1,2,3
+        # text encoder c,768
+        
+        # print(self.text_inputs.shape, all_y.shape)
+        text_inputs=torch.index_select(self.text_inputs, 0, all_y)  # b,
+        
+        # print(text_inputs.shape, image_features.shape)
+        # import sys
+        # sys.exit()
+        
         text_features = self.featurizer.encode_text(text_inputs, image_features=image_features,transfer_fn=self.transfer_fn)
         
         image_features = image_features @ self.featurizer.visual.proj
@@ -1082,6 +1178,204 @@ class Clip_train_prompt_from_image(Algorithm):
         # cosine similarity as logits
         
         return Logits_all
+
+
+class Clip_train_prompt_from_image_v2(Algorithm):
+    """
+    Empirical Risk Minimization (ERM)
+    """
+    
+    def __init__(self, input_shape, num_classes, num_domains, hparams, weights_for_balance):
+        super(Clip_train_prompt_from_image_v2, self).__init__(input_shape, num_classes, num_domains,
+                                  hparams, weights_for_balance)
+
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+        self.featurizer, preprocess = clip.load('ViT-B/16', device,prompt_tuning=True)
+        self.featurizer=self.featurizer.float()
+        # if(self.hparams['weight_init']=="clip_full"):
+        #     print("clip_full")
+            # self.featurizer.network.proj=None
+
+        # printNetworkParams(self.featurizer)
+        # for param in self.featurizer.parameters():
+        #     param.requires_grad = False
+        # self.transfer_fn = 
+        self.transfer_fn = nn.Sequential(
+            nn.Linear(768, 768),
+            nn.ReLU(inplace=True),
+            nn.Linear(768, 2*512),
+            nn.ReLU(inplace=True),
+            nn.Linear(2*512, 4*512),
+        ).to("cuda")
+        self.optimizer = torch.optim.AdamW(
+            list(self.featurizer.visual.parameters()) + list(self.transfer_fn.parameters()),
+            lr=self.hparams["lr"],
+            weight_decay=self.hparams['weight_decay']
+        )
+        
+        self.Class_names=["No DR","mild DR", "moderate DR", "severe DR", "proliferative DR"]
+        with torch.no_grad():
+            self.text_inputs  = torch.cat([tokenize(f"a photo of a {c}") for c in self.Class_names]).to("cuda")
+        
+        # print(self.Class_names)
+        self.cnt=0
+
+    def update(self, minibatches, unlabeled=None):
+        all_x = torch.cat([x for x,y in minibatches])
+        all_y = torch.cat([y for x,y in minibatches])
+        # with torch.no_grad():
+        #     out1 = self.predict( all_x)
+       
+        image_features = self.featurizer.encode_image(all_x)  # b,768   0,1,1,2,3
+        # text encoder c,768
+        
+        # print(self.text_inputs.shape, all_y.shape)
+        text_inputs=torch.index_select(self.text_inputs, 0, all_y)  # b,
+        
+        # print(text_inputs.shape, image_features.shape)
+        # import sys
+        # sys.exit()
+        
+        text_features = self.featurizer.encode_text(text_inputs, image_features=image_features,transfer_fn=self.transfer_fn)
+        
+        image_features = image_features @ self.featurizer.visual.proj
+        
+        
+        image_features = image_features / image_features.norm(dim=1, keepdim=True)
+        text_features = text_features / text_features.norm(dim=1, keepdim=True)
+        logit_scale = self.featurizer.logit_scale.exp()
+
+        logits_per_image = logit_scale * image_features @ text_features.t()
+        logits_per_text =logits_per_image.t()
+        batch_size=len(all_y)
+        num_y=torch.arange(0,batch_size).to("cuda")
+        loss1=F.cross_entropy(logits_per_image, num_y)
+        loss2=F.cross_entropy(logits_per_text, num_y)
+        loss=loss1+loss2
+        self.optimizer.zero_grad()
+        loss.backward()
+        self.optimizer.step()
+        self.cnt+=1
+        return {'loss': loss.item()}
+
+    def predict(self, x):
+        
+        image_features = self.featurizer.encode_image(x) # (B, 768)
+        image_features_proj = image_features @ self.featurizer.visual.proj # (B, 512)
+        image_features_proj = image_features_proj / image_features_proj.norm(dim=1, keepdim=True)
+        
+        logit_scale = self.featurizer.logit_scale.exp()
+        Logits_all=[]
+        for i in range(len(self.text_inputs)):
+            text_inputs=self.text_inputs[i].expand(image_features.shape[0],-1) # (B, 77)
+            text_features = self.featurizer.encode_text(text_inputs, image_features=image_features,transfer_fn=self.transfer_fn) # b,512
+            text_features = text_features / text_features.norm(dim=1, keepdim=True) # b,512
+            logits_per_image = logit_scale * torch.sum(image_features_proj * text_features, dim=1) # b,1
+            Logits_all.append(torch.unsqueeze(logits_per_image, dim=-1))
+        Logits_all=torch.cat(Logits_all,dim=1)
+        
+        # text_features = text_features[torch.arange(text_features.shape[0]), text_inputs.argmax(dim=-1)] @ self.network.text_projection
+        
+        # cosine similarity as logits
+        
+        return Logits_all
+
+class Clip_train_prompt_from_image_v3(Algorithm):
+    """
+    Empirical Risk Minimization (ERM)
+    """
+    
+    def __init__(self, input_shape, num_classes, num_domains, hparams, weights_for_balance):
+        super(Clip_train_prompt_from_image_v3, self).__init__(input_shape, num_classes, num_domains,
+                                  hparams, weights_for_balance)
+
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+        self.featurizer, preprocess = clip.load('ViT-B/16', device,prompt_tuning=True, n_prompts=8)
+        self.featurizer=self.featurizer.float()
+        # if(self.hparams['weight_init']=="clip_full"):
+        #     print("clip_full")
+            # self.featurizer.network.proj=None
+
+        # printNetworkParams(self.featurizer)
+        # for param in self.featurizer.parameters():
+        #     param.requires_grad = False
+        # self.transfer_fn = 
+        self.transfer_fn = nn.Sequential(
+            nn.Linear(768, 768),
+            nn.ReLU(inplace=True),
+            nn.Linear(768, 2*512),
+            nn.ReLU(inplace=True),
+            nn.Linear(2*512, 8*512),
+        ).to("cuda")
+        self.optimizer = torch.optim.AdamW(
+            list(self.featurizer.visual.parameters()) + list(self.transfer_fn.parameters()),
+            lr=self.hparams["lr"],
+            weight_decay=self.hparams['weight_decay']
+        )
+        
+        self.Class_names=["No DR","mild DR", "moderate DR", "severe DR", "proliferative DR"]
+        with torch.no_grad():
+            self.text_inputs  = torch.cat([tokenize(f"a photo of a {c}") for c in self.Class_names]).to("cuda")
+        
+        # print(self.Class_names)
+        self.cnt=0
+
+    def update(self, minibatches, unlabeled=None):
+        all_x = torch.cat([x for x,y in minibatches])
+        all_y = torch.cat([y for x,y in minibatches])
+        # with torch.no_grad():
+        #     out1 = self.predict( all_x)
+       
+        image_features = self.featurizer.encode_image(all_x)  # b,768   0,1,1,2,3
+        # text encoder c,768
+        
+        text_inputs=torch.index_select(self.text_inputs, 0, all_y)  # b,
+        
+        
+        text_features = self.featurizer.encode_text(text_inputs, image_features=image_features,transfer_fn=self.transfer_fn)
+        
+        image_features = image_features @ self.featurizer.visual.proj
+        
+        
+        image_features = image_features / image_features.norm(dim=1, keepdim=True)
+        text_features = text_features / text_features.norm(dim=1, keepdim=True)
+        logit_scale = self.featurizer.logit_scale.exp()
+
+        logits_per_image = logit_scale * image_features @ text_features.t()
+        logits_per_text =logits_per_image.t()
+        batch_size=len(all_y)
+        num_y=torch.arange(0,batch_size).to("cuda")
+        loss1=F.cross_entropy(logits_per_image, num_y)
+        loss2=F.cross_entropy(logits_per_text, num_y)
+        loss=loss1+loss2
+        self.optimizer.zero_grad()
+        loss.backward()
+        self.optimizer.step()
+        self.cnt+=1
+        return {'loss': loss.item()}
+
+    def predict(self, x):
+        
+        image_features = self.featurizer.encode_image(x) # (B, 768)
+        image_features_proj = image_features @ self.featurizer.visual.proj # (B, 512)
+        image_features_proj = image_features_proj / image_features_proj.norm(dim=1, keepdim=True)
+        
+        logit_scale = self.featurizer.logit_scale.exp()
+        Logits_all=[]
+        for i in range(len(self.text_inputs)):
+            text_inputs=self.text_inputs[i].expand(image_features.shape[0],-1) # (B, 77)
+            text_features = self.featurizer.encode_text(text_inputs, image_features=image_features,transfer_fn=self.transfer_fn) # b,512
+            text_features = text_features / text_features.norm(dim=1, keepdim=True) # b,512
+            logits_per_image = logit_scale * torch.sum(image_features_proj * text_features, dim=1) # b,1
+            Logits_all.append(torch.unsqueeze(logits_per_image, dim=-1))
+        Logits_all=torch.cat(Logits_all,dim=1)
+        
+        # text_features = text_features[torch.arange(text_features.shape[0]), text_inputs.argmax(dim=-1)] @ self.network.text_projection
+        
+        # cosine similarity as logits
+        
+        return Logits_all
+
 
 
 class Fish(Algorithm):
@@ -5485,49 +5779,49 @@ class CausIRL_CORAL(AbstractCausIRL):
 #         return self.network(x)
 
 
-# class ERM_focal_loss(Algorithm):
-#     """
-#     Empirical Risk Minimization (ERM) with Focal Loss
-#     """
+class ERM_focal_loss(Algorithm):
+    """
+    Empirical Risk Minimization (ERM) with Focal Loss
+    """
 
-#     def __init__(self, input_shape, num_classes, num_domains, hparams):
-#         super(ERM_focal_loss, self).__init__(input_shape, num_classes, num_domains,
-#                                   hparams)
-#         self.featurizer = networks.Featurizer(input_shape, self.hparams)
-#         self.classifier = networks.Classifier(
-#             self.featurizer.n_outputs,
-#             num_classes,
-#             self.hparams['nonlinear_classifier'])
+    def __init__(self, input_shape, num_classes, num_domains, hparams, weights_for_balance=None):
+        super(ERM_focal_loss, self).__init__(input_shape, num_classes, num_domains,
+                                  hparams, weights_for_balance)
+        self.featurizer = networks.Featurizer(input_shape, self.hparams)
+        self.classifier = networks.Classifier(
+            self.featurizer.n_outputs,
+            num_classes,
+            self.hparams['nonlinear_classifier'])
 
-#         self.network = nn.Sequential(self.featurizer, self.classifier)
-#         self.optimizer = torch.optim.Adam(
-#             self.network.parameters(),
-#             lr=self.hparams["lr"],
-#             weight_decay=self.hparams['weight_decay']
-#         )
+        self.network = nn.Sequential(self.featurizer, self.classifier)
+        self.optimizer = torch.optim.Adam(
+            self.network.parameters(),
+            lr=self.hparams["lr"],
+            weight_decay=self.hparams['weight_decay']
+        )
         
-#         self.focal_loss = torch.hub.load(
-#             'adeelh/pytorch-multi-class-focal-loss',
-#             model='FocalLoss',
-#             alpha=None,
-#             gamma=2,
-#             reduction='mean',
-#             force_reload=False
-#         )
+        self.focal_loss = torch.hub.load(
+            'adeelh/pytorch-multi-class-focal-loss',
+            model='FocalLoss',
+            alpha=None,
+            gamma=2,
+            reduction='mean',
+            force_reload=False
+        )
 
-#     def update(self, minibatches, unlabeled=None):
-#         all_x = torch.cat([x for x, y in minibatches])
-#         all_y = torch.cat([y for x, y in minibatches])
-#         loss = self.focal_loss(self.predict(all_x), all_y)
+    def update(self, minibatches, unlabeled=None):
+        all_x = torch.cat([x for x, y in minibatches])
+        all_y = torch.cat([y for x, y in minibatches])
+        loss = self.focal_loss(self.predict(all_x), all_y)
 
-#         self.optimizer.zero_grad()
-#         loss.backward()
-#         self.optimizer.step()
+        self.optimizer.zero_grad()
+        loss.backward()
+        self.optimizer.step()
 
-#         return {'loss': loss.item()}
+        return {'loss': loss.item()}
 
-#     def predict(self, x):
-#         return self.network(x)
+    def predict(self, x):
+        return self.network(x)
 
 # class ERM_ViT_classifier_learning(Algorithm):
 #     """
@@ -7441,3 +7735,586 @@ class CausIRL_CORAL(AbstractCausIRL):
 #     def __init__(self, input_shape, num_classes, num_domains, hparams):
 #         super(CausIRL_CORAL, self).__init__(input_shape, num_classes, num_domains,
 #                                   hparams, gaussian=False)
+
+
+class Clip_train_zero_shot(Algorithm):
+    """
+    Empirical Risk Minimization (ERM)
+    """
+
+
+    def __init__(self, input_shape, num_classes, num_domains, hparams, weights_for_balance):
+        super(Clip_train_zero_shot, self).__init__(input_shape, num_classes, num_domains,
+                                                   hparams, weights_for_balance)
+
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+        self.featurizer, preprocess = clip.load('ViT-B/16', device)
+        self.featurizer=self.featurizer.float()
+        # if(self.hparams['weight_init']=="clip_full"):
+        #     print("clip_full")
+            # self.featurizer.network.proj=None
+
+        # printNetworkParams(self.featurizer)
+        self.optimizer = torch.optim.AdamW(
+            list(self.featurizer.visual.parameters()),
+            lr=self.hparams["lr"],
+            weight_decay=self.hparams['weight_decay']
+        )
+        self.Class_names=["No DR","mild DR", "moderate DR", "severe DR", "proliferative DR"]
+        with torch.no_grad():
+            text_inputs  = torch.cat([tokenize(f"a photo of a {c}") for c in self.Class_names]).to("cuda")
+            self.text_features = self.featurizer.encode_text(text_inputs)
+        
+        # print(self.Class_names)
+        self.cnt=0
+
+    def update(self, minibatches, unlabeled=None):
+        return {'loss': 1.123}
+
+    def predict(self, x):
+ 
+        
+        image_features = self.featurizer.encode_image(x)
+        
+        # text_features = text_features[torch.arange(text_features.shape[0]), text_inputs.argmax(dim=-1)] @ self.network.text_projection
+        image_features = image_features @ self.featurizer.visual.proj
+
+        image_features = image_features / image_features.norm(dim=1, keepdim=True)
+        text_features = self.text_features / self.text_features.norm(dim=1, keepdim=True)
+    
+
+        # cosine similarity as logits
+        logit_scale = self.featurizer.logit_scale.exp()
+
+        logits_per_image = logit_scale * image_features @ text_features.t()
+        
+        return logits_per_image
+
+
+class Clip_train_advanced_zero_shot(Algorithm):
+    """
+    Empirical Risk Minimization (ERM)
+    """
+
+
+    def __init__(self, input_shape, num_classes, num_domains, hparams, weights_for_balance):
+        super(Clip_train_advanced_zero_shot, self).__init__(input_shape, num_classes, num_domains,
+                                                   hparams, weights_for_balance)
+
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+        self.featurizer, preprocess = clip.load('ViT-B/16', device)
+        self.featurizer=self.featurizer.float()
+        # if(self.hparams['weight_init']=="clip_full"):
+        #     print("clip_full")
+            # self.featurizer.network.proj=None
+
+        # printNetworkParams(self.featurizer)
+        self.optimizer = torch.optim.AdamW(
+            list(self.featurizer.visual.parameters()),
+            lr=self.hparams["lr"],
+            weight_decay=self.hparams['weight_decay']
+        )
+        self.Class_names=["No Diabetic retinopathy","mild Diabetic retinopathy", "moderate Diabetic retinopathy", "severe Diabetic retinopathy", "proliferative Diabetic retinopathy"]
+        with torch.no_grad():
+            text_inputs  = torch.cat([tokenize(f"a photo of a {c}") for c in self.Class_names]).to("cuda")
+            self.text_features = self.featurizer.encode_text(text_inputs)
+        
+        # print(self.Class_names)
+        self.cnt=0
+
+    def update(self, minibatches, unlabeled=None):
+        return {'loss': 1.123}
+
+    def predict(self, x):
+ 
+        
+        image_features = self.featurizer.encode_image(x)
+        
+        # text_features = text_features[torch.arange(text_features.shape[0]), text_inputs.argmax(dim=-1)] @ self.network.text_projection
+        image_features = image_features @ self.featurizer.visual.proj
+
+        image_features = image_features / image_features.norm(dim=1, keepdim=True)
+        text_features = self.text_features / self.text_features.norm(dim=1, keepdim=True)
+    
+
+        # cosine similarity as logits
+        logit_scale = self.featurizer.logit_scale.exp()
+
+        logits_per_image = logit_scale * image_features @ text_features.t()
+        
+        return logits_per_image
+
+
+class Biomedical_Clip_train_zero_shot(Algorithm):
+    """
+    Empirical Risk Minimization (ERM)
+    """
+
+
+    def __init__(self, input_shape, num_classes, num_domains, hparams, weights_for_balance):
+        super(Biomedical_Clip_train_zero_shot, self).__init__(input_shape, num_classes, num_domains,
+                                  hparams, weights_for_balance)
+
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+        
+        # Load BioBERT tokenizer and model
+        tokenizer = AutoTokenizer.from_pretrained("dmis-lab/biobert-base-cased-v1.1")
+        biobert_mlp_model = AutoModel.from_pretrained("dmis-lab/biobert-base-cased-v1.1")
+        biobert_mlp_model = biobert_mlp_model.to(device)
+        
+        self.featurizer, preprocess = clip.load('ViT-B/16', device)
+        self.featurizer=self.featurizer.float()
+        # if(self.hparams['weight_init']=="clip_full"):
+        #     print("clip_full")
+            # self.featurizer.network.proj=None
+
+        # printNetworkParams(self.featurizer)
+        self.optimizer = torch.optim.AdamW(
+            list(self.featurizer.visual.parameters()),
+            lr=self.hparams["lr"],
+            weight_decay=self.hparams['weight_decay']
+        )
+        self.Class_names=["No DR","mild DR", "moderate DR", "severe DR", "proliferative DR"]
+        
+        # print("what is going.........................................")
+        with torch.no_grad():
+            sentences = [tokenizer(f"a photo of a {c}", return_tensors="pt")['input_ids'] for c in self.Class_names]
+            # print(sentences)
+            # pdb.set_trace()
+            # text_inputs  = torch.cat(sentences)
+            # text_inputs = text_inputs.to(device)
+            # pdb.set_trace()
+            # breakpoint()
+            # print(sentences[0].shape)
+            # print('----------'*300)
+            # print(sentences[0].to(device))
+            # print('hahahahaha'*300)
+            # s = sentences[0]
+            # s = s.to(device)
+            # print(biobert_mlp_model(s))
+            outputs = torch.cat([biobert_mlp_model(s.to(device)).pooler_output for s in sentences])
+            # pdb.set_trace()
+            self.text_features = outputs
+            # del biobert_mlp_model
+            # self.text_features = self.featurizer.encode_text(text_inputs)
+        
+        # print(self.Class_names)
+        self.cnt=0
+
+    def update(self, minibatches, unlabeled=None):
+        return {'loss': 1.234}
+
+    def predict(self, x):
+ 
+        
+        image_features = self.featurizer.encode_image(x)
+        
+        # text_features = text_features[torch.arange(text_features.shape[0]), text_inputs.argmax(dim=-1)] @ self.network.text_projection
+        # image_features = image_features @ self.featurizer.visual.proj
+
+        image_features = image_features / image_features.norm(dim=1, keepdim=True)
+        text_features = self.text_features / self.text_features.norm(dim=1, keepdim=True)
+    
+
+        # cosine similarity as logits
+        logit_scale = self.featurizer.logit_scale.exp()
+
+        logits_per_image = logit_scale * image_features @ text_features.t()
+        
+        return logits_per_image
+
+
+class Biomedical_Clip_train_advanced_zero_shot(Algorithm):
+    """
+    Empirical Risk Minimization (ERM)
+    """
+
+
+    def __init__(self, input_shape, num_classes, num_domains, hparams, weights_for_balance):
+        super(Biomedical_Clip_train_advanced_zero_shot, self).__init__(input_shape, num_classes, num_domains,
+                                  hparams, weights_for_balance)
+
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+        
+        # Load BioBERT tokenizer and model
+        tokenizer = AutoTokenizer.from_pretrained("dmis-lab/biobert-base-cased-v1.1")
+        biobert_mlp_model = AutoModel.from_pretrained("dmis-lab/biobert-base-cased-v1.1")
+        biobert_mlp_model = biobert_mlp_model.to(device)
+        
+        self.featurizer, preprocess = clip.load('ViT-B/16', device)
+        self.featurizer=self.featurizer.float()
+        # if(self.hparams['weight_init']=="clip_full"):
+        #     print("clip_full")
+            # self.featurizer.network.proj=None
+
+        # printNetworkParams(self.featurizer)
+        self.optimizer = torch.optim.AdamW(
+            list(self.featurizer.visual.parameters()),
+            lr=self.hparams["lr"],
+            weight_decay=self.hparams['weight_decay']
+        )
+        self.Class_names=["No Diabetic retinopathy","mild Diabetic retinopathy", "moderate Diabetic retinopathy", "severe Diabetic retinopathy", "proliferative Diabetic retinopathy"]
+        
+        # print("what is going.........................................")
+        with torch.no_grad():
+            sentences = [tokenizer(f"a photo of a {c} case", return_tensors="pt")['input_ids'] for c in self.Class_names]
+            # print(sentences)
+            # pdb.set_trace()
+            # text_inputs  = torch.cat(sentences)
+            # text_inputs = text_inputs.to(device)
+            # pdb.set_trace()
+            # breakpoint()
+            # print(sentences[0].shape)
+            # print('----------'*300)
+            # print(sentences[0].to(device))
+            # print('hahahahaha'*300)
+            # s = sentences[0]
+            # s = s.to(device)
+            # print(biobert_mlp_model(s))
+            outputs = torch.cat([biobert_mlp_model(s.to(device)).pooler_output for s in sentences])
+            # pdb.set_trace()
+            self.text_features = outputs
+            # del biobert_mlp_model
+            # self.text_features = self.featurizer.encode_text(text_inputs)
+        
+        # print(self.Class_names)
+        self.cnt=0
+
+    def update(self, minibatches, unlabeled=None):
+        return {'loss': 1.234}
+
+    def predict(self, x):
+ 
+        
+        image_features = self.featurizer.encode_image(x)
+        
+        # text_features = text_features[torch.arange(text_features.shape[0]), text_inputs.argmax(dim=-1)] @ self.network.text_projection
+        # image_features = image_features @ self.featurizer.visual.proj
+
+        image_features = image_features / image_features.norm(dim=1, keepdim=True)
+        text_features = self.text_features / self.text_features.norm(dim=1, keepdim=True)
+    
+
+        # cosine similarity as logits
+        logit_scale = self.featurizer.logit_scale.exp()
+
+        logits_per_image = logit_scale * image_features @ text_features.t()
+        
+        return logits_per_image
+
+
+
+class Biomedical_Clip_train_advanced_v2_zero_shot(Algorithm):
+    """
+    Empirical Risk Minimization (ERM)
+    """
+
+
+    def __init__(self, input_shape, num_classes, num_domains, hparams, weights_for_balance):
+        super(Biomedical_Clip_train_advanced_v2_zero_shot, self).__init__(input_shape, num_classes, num_domains,
+                                  hparams, weights_for_balance)
+
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+        
+        # Load BioBERT tokenizer and model
+        tokenizer = AutoTokenizer.from_pretrained("dmis-lab/biobert-base-cased-v1.1")
+        biobert_mlp_model = AutoModel.from_pretrained("dmis-lab/biobert-base-cased-v1.1")
+        biobert_mlp_model = biobert_mlp_model.to(device)
+        
+        self.featurizer, preprocess = clip.load('ViT-B/16', device)
+        self.featurizer=self.featurizer.float()
+        # if(self.hparams['weight_init']=="clip_full"):
+        #     print("clip_full")
+            # self.featurizer.network.proj=None
+
+        # printNetworkParams(self.featurizer)
+        self.optimizer = torch.optim.AdamW(
+            list(self.featurizer.visual.parameters()),
+            lr=self.hparams["lr"],
+            weight_decay=self.hparams['weight_decay']
+        )
+        self.Class_names=["No Diabetic retinopathy","mild Diabetic retinopathy", "moderate Diabetic retinopathy", "severe Diabetic retinopathy", "proliferative Diabetic retinopathy"]
+        
+        # print("what is going.........................................")
+        with torch.no_grad():
+            sentences = [tokenizer(f"a photo of a {c}", return_tensors="pt")['input_ids'] for c in self.Class_names]
+            # print(sentences)
+            # pdb.set_trace()
+            # text_inputs  = torch.cat(sentences)
+            # text_inputs = text_inputs.to(device)
+            # pdb.set_trace()
+            # breakpoint()
+            # print(sentences[0].shape)
+            # print('----------'*300)
+            # print(sentences[0].to(device))
+            # print('hahahahaha'*300)
+            # s = sentences[0]
+            # s = s.to(device)
+            # print(biobert_mlp_model(s))
+            outputs = torch.cat([biobert_mlp_model(s.to(device)).pooler_output for s in sentences])
+            # pdb.set_trace()
+            self.text_features = outputs
+            # del biobert_mlp_model
+            # self.text_features = self.featurizer.encode_text(text_inputs)
+        
+        # print(self.Class_names)
+        self.cnt=0
+
+    def update(self, minibatches, unlabeled=None):
+        return {'loss': 1.234}
+
+    def predict(self, x):
+ 
+        
+        image_features = self.featurizer.encode_image(x)
+        
+        # text_features = text_features[torch.arange(text_features.shape[0]), text_inputs.argmax(dim=-1)] @ self.network.text_projection
+        # image_features = image_features @ self.featurizer.visual.proj
+
+        image_features = image_features / image_features.norm(dim=1, keepdim=True)
+        text_features = self.text_features / self.text_features.norm(dim=1, keepdim=True)
+    
+
+        # cosine similarity as logits
+        logit_scale = self.featurizer.logit_scale.exp()
+
+        logits_per_image = logit_scale * image_features @ text_features.t()
+        
+        return logits_per_image
+
+
+
+class Clinical_Clip_train_zero_shot(Algorithm):
+    """
+    Empirical Risk Minimization (ERM)
+    """
+    
+    def __init__(self, input_shape, num_classes, num_domains, hparams, weights_for_balance):
+        super(Clinical_Clip_train_zero_shot, self).__init__(input_shape, num_classes, num_domains,
+                                  hparams, weights_for_balance)
+
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+        
+        # Load BioBERT tokenizer and model
+        tokenizer = AutoTokenizer.from_pretrained("emilyalsentzer/Bio_ClinicalBERT")
+        biobert_mlp_model = AutoModel.from_pretrained("emilyalsentzer/Bio_ClinicalBERT")
+        biobert_mlp_model = biobert_mlp_model.to(device)
+        
+        self.featurizer, preprocess = clip.load('ViT-B/16', device)
+        self.featurizer=self.featurizer.float()
+        # if(self.hparams['weight_init']=="clip_full"):
+        #     print("clip_full")
+            # self.featurizer.network.proj=None
+
+        # printNetworkParams(self.featurizer)
+        self.optimizer = torch.optim.AdamW(
+            list(self.featurizer.visual.parameters()),
+            lr=self.hparams["lr"],
+            weight_decay=self.hparams['weight_decay']
+        )
+        self.Class_names=["No DR","mild DR", "moderate DR", "severe DR", "proliferative DR"]
+        
+        # print("what is going.........................................")
+        with torch.no_grad():
+            sentences = [tokenizer(f"a photo of a {c}", return_tensors="pt")['input_ids'] for c in self.Class_names]
+            # print(sentences)
+            # pdb.set_trace()
+            # text_inputs  = torch.cat(sentences)
+            # text_inputs = text_inputs.to(device)
+            # pdb.set_trace()
+            # breakpoint()
+            # print(sentences[0].shape)
+            # print('----------'*300)
+            # print(sentences[0].to(device))
+            # print('hahahahaha'*300)
+            # s = sentences[0]
+            # s = s.to(device)
+            # print(biobert_mlp_model(s))
+            outputs = torch.cat([biobert_mlp_model(s.to(device)).pooler_output for s in sentences])
+            # pdb.set_trace()
+            self.text_features = outputs
+            # del biobert_mlp_model
+            # self.text_features = self.featurizer.encode_text(text_inputs)
+        
+        # print(self.Class_names)
+        self.cnt=0
+
+    def update(self, minibatches, unlabeled=None):
+        return {'loss': 1.234}
+
+    def predict(self, x):
+ 
+        
+        image_features = self.featurizer.encode_image(x)
+        
+        # text_features = text_features[torch.arange(text_features.shape[0]), text_inputs.argmax(dim=-1)] @ self.network.text_projection
+        # image_features = image_features @ self.featurizer.visual.proj
+
+        image_features = image_features / image_features.norm(dim=1, keepdim=True)
+        text_features = self.text_features / self.text_features.norm(dim=1, keepdim=True)
+    
+
+        # cosine similarity as logits
+        logit_scale = self.featurizer.logit_scale.exp()
+
+        logits_per_image = logit_scale * image_features @ text_features.t()
+        
+        return logits_per_image
+
+
+class Biomedical_Clip_train_squad_zero_shot(Algorithm):
+    """
+    Empirical Risk Minimization (ERM)
+    """
+    
+    def __init__(self, input_shape, num_classes, num_domains, hparams, weights_for_balance):
+        super(Biomedical_Clip_train_squad_zero_shot, self).__init__(input_shape, num_classes, num_domains,
+                                  hparams, weights_for_balance)
+
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+        
+        # Load BioBERT tokenizer and model
+        tokenizer = AutoTokenizer.from_pretrained("dmis-lab/biobert-base-cased-v1.1-squad")
+        biobert_mlp_model = AutoModel.from_pretrained("dmis-lab/biobert-base-cased-v1.1-squad")
+        biobert_mlp_model = biobert_mlp_model.to(device)
+        
+        self.featurizer, preprocess = clip.load('ViT-B/16', device)
+        self.featurizer=self.featurizer.float()
+        # if(self.hparams['weight_init']=="clip_full"):
+        #     print("clip_full")
+            # self.featurizer.network.proj=None
+
+        # printNetworkParams(self.featurizer)
+        self.optimizer = torch.optim.AdamW(
+            list(self.featurizer.visual.parameters()),
+            lr=self.hparams["lr"],
+            weight_decay=self.hparams['weight_decay']
+        )
+        self.Class_names=["No DR","mild DR", "moderate DR", "severe DR", "proliferative DR"]
+        
+        # print("what is going.........................................")
+        with torch.no_grad():
+            sentences = [tokenizer(f"a photo of a {c}", return_tensors="pt")['input_ids'] for c in self.Class_names]
+            # print(sentences)
+            # pdb.set_trace()
+            # text_inputs  = torch.cat(sentences)
+            # text_inputs = text_inputs.to(device)
+            # pdb.set_trace()
+            # breakpoint()
+            # print(sentences[0].shape)
+            # print('----------'*300)
+            # print(sentences[0].to(device))
+            # print('hahahahaha'*300)
+            # s = sentences[0]
+            # s = s.to(device)
+            # print(biobert_mlp_model(s))
+            outputs = torch.cat([biobert_mlp_model(s.to(device)).pooler_output for s in sentences])
+            # pdb.set_trace()
+            self.text_features = outputs
+            # del biobert_mlp_model
+            # self.text_features = self.featurizer.encode_text(text_inputs)
+        
+        # print(self.Class_names)
+        self.cnt=0
+
+    def update(self, minibatches, unlabeled=None):
+        return {'loss': 1.234}
+
+    def predict(self, x):
+ 
+        
+        image_features = self.featurizer.encode_image(x)
+        
+        # text_features = text_features[torch.arange(text_features.shape[0]), text_inputs.argmax(dim=-1)] @ self.network.text_projection
+        # image_features = image_features @ self.featurizer.visual.proj
+
+        image_features = image_features / image_features.norm(dim=1, keepdim=True)
+        text_features = self.text_features / self.text_features.norm(dim=1, keepdim=True)
+    
+
+        # cosine similarity as logits
+        logit_scale = self.featurizer.logit_scale.exp()
+
+        logits_per_image = logit_scale * image_features @ text_features.t()
+        
+        return logits_per_image
+
+
+
+class Biomedical_Clip_train_squad_advanced_zero_shot(Algorithm):
+    """
+    Empirical Risk Minimization (ERM)
+    """
+
+
+    def __init__(self, input_shape, num_classes, num_domains, hparams, weights_for_balance):
+        super(Biomedical_Clip_train_squad_advanced_zero_shot, self).__init__(input_shape, num_classes, num_domains,
+                                  hparams, weights_for_balance)
+
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+        
+        # Load BioBERT tokenizer and model
+        tokenizer = AutoTokenizer.from_pretrained("dmis-lab/biobert-base-cased-v1.1-squad")
+        biobert_mlp_model = AutoModel.from_pretrained("dmis-lab/biobert-base-cased-v1.1-squad")
+        biobert_mlp_model = biobert_mlp_model.to(device)
+        
+        self.featurizer, preprocess = clip.load('ViT-B/16', device)
+        self.featurizer=self.featurizer.float()
+        # if(self.hparams['weight_init']=="clip_full"):
+        #     print("clip_full")
+            # self.featurizer.network.proj=None
+
+        # printNetworkParams(self.featurizer)
+        self.optimizer = torch.optim.AdamW(
+            list(self.featurizer.visual.parameters()),
+            lr=self.hparams["lr"],
+            weight_decay=self.hparams['weight_decay']
+        )
+        self.Class_names=["No Diabetic retinopathy","mild Diabetic retinopathy", "moderate Diabetic retinopathy", "severe Diabetic retinopathy", "proliferative Diabetic retinopathy"]
+        
+        # print("what is going.........................................")
+        with torch.no_grad():
+            sentences = [tokenizer(f"a photo of a {c}", return_tensors="pt")['input_ids'] for c in self.Class_names]
+            # print(sentences)
+            # pdb.set_trace()
+            # text_inputs  = torch.cat(sentences)
+            # text_inputs = text_inputs.to(device)
+            # pdb.set_trace()
+            # breakpoint()
+            # print(sentences[0].shape)
+            # print('----------'*300)
+            # print(sentences[0].to(device))
+            # print('hahahahaha'*300)
+            # s = sentences[0]
+            # s = s.to(device)
+            # print(biobert_mlp_model(s))
+            outputs = torch.cat([biobert_mlp_model(s.to(device)).pooler_output for s in sentences])
+            # pdb.set_trace()
+            self.text_features = outputs
+            # del biobert_mlp_model
+            # self.text_features = self.featurizer.encode_text(text_inputs)
+        
+        # print(self.Class_names)
+        self.cnt=0
+
+    def update(self, minibatches, unlabeled=None):
+        return {'loss': 1.234}
+
+    def predict(self, x):
+        image_features = self.featurizer.encode_image(x)
+        
+        # text_features = text_features[torch.arange(text_features.shape[0]), text_inputs.argmax(dim=-1)] @ self.network.text_projection
+        # image_features = image_features @ self.featurizer.visual.proj
+
+        image_features = image_features / image_features.norm(dim=1, keepdim=True)
+        text_features = self.text_features / self.text_features.norm(dim=1, keepdim=True)
+    
+
+        # cosine similarity as logits
+        logit_scale = self.featurizer.logit_scale.exp()
+
+        logits_per_image = logit_scale * image_features @ text_features.t()
+        
+        return logits_per_image
+
+
